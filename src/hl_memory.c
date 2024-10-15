@@ -80,22 +80,22 @@ int hl_memory_allocate_buffer(struct memory_ctx *ctx, int alignment, uint64_t si
     const uint64_t device_handle = hlthunk_device_memory_alloc(hl_ctx->device_fd, buf_size, page_size,
                                                                HL_MEM_CONTIGUOUS, NOT_SHARED);
     if (0 == device_handle) {
-        printf("Failed to allocate %lu bytes of device memory\n", buf_size);
+        fprintf(stderr, "Failed to allocate %lu bytes of device memory\n", buf_size);
         return FAILURE;
     }
     buffer_addr = hlthunk_device_memory_map(hl_ctx->device_fd, device_handle, 0);
     if (0 == buffer_addr) {
-        printf("Failed to map device memory allocation\n");
+        fprintf(stderr, "Failed to map device memory allocation\n");
         return FAILURE;
     }
     if (0 != pthread_mutex_lock(&hl_ctx->mem_table_device_lock)) {
-        printf("Failed to lock mutex while allocating memory\n");
+        fprintf(stderr, "Failed to lock mutex while allocating memory\n");
         return FAILURE;
     }
     k = kh_put(uint64_t, hl_ctx->mem_table_device, buffer_addr, &rc);
     kh_val(hl_ctx->mem_table_device, k) = device_handle;
     if (0 != pthread_mutex_unlock(&hl_ctx->mem_table_device_lock)) {
-        printf("Failed to unlock mutex\n");
+        fprintf(stderr, "Failed to unlock mutex\n");
         return FAILURE;
     }
     if (hl_is_gaudi1(hl_ctx->device_fd)) {
@@ -111,7 +111,7 @@ int hl_memory_allocate_buffer(struct memory_ctx *ctx, int alignment, uint64_t si
         return FAILURE;
     }
 
-    printf("Allocated %lu bytes of accelerator buffer at %p on fd %d\n",
+    fprintf(stderr, "Allocated %lu bytes of accelerator buffer at %p on fd %d\n",
            (unsigned long) buf_size, (void *) buffer_addr, fd);
     *dmabuf_fd = fd;
     *dmabuf_offset = 0;
@@ -127,16 +127,16 @@ int hl_memory_free_buffer(struct memory_ctx *ctx, int dmabuf_fd, void *addr, uin
     int rc = hlthunk_memory_unmap(hl_ctx->device_fd, (uint64_t) addr);
 
     if (rc) {
-        printf("Failed to unmap host memory\n");
+        fprintf(stderr, "Failed to unmap host memory\n");
         return rc;
     }
     if (0 != pthread_mutex_lock(&hl_ctx->mem_table_device_lock)) {
-        printf("Failed to lock mutex while deallocating memory\n");
+        fprintf(stderr, "Failed to lock mutex while deallocating memory\n");
         return FAILURE;
     }
     k = kh_get(uint64_t, hl_ctx->mem_table_device, (uintptr_t) addr);
     if (k == kh_end(hl_ctx->mem_table_device)) {
-        printf("Failed to find memory handle handle\n");
+        fprintf(stderr, "Failed to find memory handle handle\n");
         (void) pthread_mutex_unlock(&hl_ctx->mem_table_device_lock);
         return FAILURE;
     }
