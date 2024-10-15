@@ -27,6 +27,42 @@ struct hl_memory_ctx {
     pthread_mutex_t mem_handle_table_lock;
 };
 
+static int hl_get_memory_handle_key(struct hl_memory_ctx * const hl_ctx, const uint64_t addr, khint_t * const key)
+{
+    const khint_t k = kh_get(uint64_t, hl_ctx->mem_handle_table, (uintptr_t) addr);
+    if (k == kh_end(hl_ctx->mem_handle_table)) {
+        fprintf(stderr, "Failed to find memory handle\n");
+        return FAILURE;
+    }
+
+    *key = k;
+    return SUCCESS;
+}
+
+static int hl_set_memory_handle(struct hl_memory_ctx * const hl_ctx, const uint64_t addr, const uint64_t memory_handle)
+{
+    int rc = -1;
+    const khint_t k = kh_put(uint64_t, hl_ctx->mem_handle_table, addr, &rc);
+    if (-1 == rc) {
+        fprintf(stderr, "Failed to store memory handle\n");
+        return FAILURE;
+    }
+    kh_val(hl_ctx->mem_handle_table, k) = memory_handle;
+    return SUCCESS;
+}
+
+static int hl_delete_memory_handle(struct hl_memory_ctx * const hl_ctx, const uint64_t addr, uint64_t * const memory_handle)
+{
+    khint_t k;
+    if (SUCCESS != hl_get_memory_handle_key(hl_ctx, addr, &k)) {
+        return FAILURE;
+    }
+
+    *memory_handle = kh_val(hl_ctx->mem_handle_table, k);
+    kh_del(uint64_t, hl_ctx->mem_handle_table, k);
+    return SUCCESS;
+}
+
 static bool hl_is_gaudi1(const int fd) {
     const enum hlthunk_device_name device = hlthunk_get_device_name_from_fd(fd);
     return ((HLTHUNK_DEVICE_GAUDI == device) || (HLTHUNK_DEVICE_GAUDI_HL2000M == device));
@@ -75,8 +111,6 @@ int hl_memory_allocate_buffer(struct memory_ctx *ctx, int alignment, uint64_t si
     uint64_t buffer_addr = 0;
     const size_t buf_size = (size + ACCEL_PAGE_SIZE - 1) & ~(ACCEL_PAGE_SIZE - 1);
 
-    int rc;
-    khint_t k;
     const uint64_t memory_handle = hlthunk_device_memory_alloc(hl_ctx->device_fd, buf_size, page_size,
                                                                HL_MEM_CONTIGUOUS, NOT_SHARED);
     if (0 == memory_handle) {
@@ -92,8 +126,11 @@ int hl_memory_allocate_buffer(struct memory_ctx *ctx, int alignment, uint64_t si
         fprintf(stderr, "Failed to lock mutex while allocating memory\n");
         return FAILURE;
     }
-    k = kh_put(uint64_t, hl_ctx->mem_handle_table, buffer_addr, &rc);
-    kh_val(hl_ctx->mem_handle_table, k) = memory_handle;
+    if (SUCCESS != hl_set_memory_handle(hl_ctx, buffer_addr, memory_handle))
+    {
+        (void) pthread_mutex_unlock(&hl_ctx->mem_handle_table_lock);
+        return FAILURE;
+    }
     if (0 != pthread_mutex_unlock(&hl_ctx->mem_handle_table_lock)) {
         fprintf(stderr, "Failed to unlock mutex\n");
         return FAILURE;
@@ -123,7 +160,6 @@ int hl_memory_allocate_buffer(struct memory_ctx *ctx, int alignment, uint64_t si
 int hl_memory_free_buffer(struct memory_ctx *ctx, int dmabuf_fd, void *addr, uint64_t size) {
     struct hl_memory_ctx *hl_ctx = container_of(ctx, struct hl_memory_ctx, base);
     uint64_t memory_handle = INVALID_FD;
-    khint_t k;
     int rc = hlthunk_memory_unmap(hl_ctx->device_fd, (uint64_t) addr);
 
     if (rc) {
@@ -134,16 +170,13 @@ int hl_memory_free_buffer(struct memory_ctx *ctx, int dmabuf_fd, void *addr, uin
         fprintf(stderr, "Failed to lock mutex while deallocating memory\n");
         return FAILURE;
     }
-    k = kh_get(uint64_t, hl_ctx->mem_handle_table, (uintptr_t) addr);
-    if (k == kh_end(hl_ctx->mem_handle_table)) {
-        fprintf(stderr, "Failed to find memory handle handle\n");
+    if (SUCCESS != hl_delete_memory_handle(hl_ctx, (uint64_t) addr, &memory_handle)){
+        fprintf(stderr, "Failed to remove memory handle\n");
         (void) pthread_mutex_unlock(&hl_ctx->mem_handle_table_lock);
         return FAILURE;
     }
 
-    memory_handle = kh_val(hl_ctx->mem_handle_table, k);
     rc = hlthunk_device_memory_free(hl_ctx->device_fd, memory_handle);
-    kh_del(uint64_t, hl_ctx->mem_handle_table, k);
     pthread_mutex_unlock(&hl_ctx->mem_handle_table_lock);
     return (0 == rc) ? SUCCESS : FAILURE;
 }
