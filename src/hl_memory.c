@@ -6,61 +6,55 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
-#include <fcntl.h>
+#include <pthread.h>
 #include "hl_memory.h"
 #include "perftest_parameters.h"
 #include "synapse_api.h"
 #include "hlthunk.h"
-#include "khash.h"
-
-KHASH_MAP_INIT_INT64(uint64_t, uint64_t)
 
 #define ACCEL_PAGE_SIZE (4096)
 #define INVALID_FD (-1)
+
+#define LIST_SIZE (64)
+
+typedef struct {
+    uint64_t key;
+    uint64_t value;
+    bool is_occupied;
+} KeyValuePair;
 
 struct hl_memory_ctx {
     struct memory_ctx base;
     char *device_bus_id;
     synDeviceId device_id;
     int device_fd;
-    khash_t(uint64_t) *mem_handle_table;
+    KeyValuePair mem_handle_table[LIST_SIZE];
     pthread_mutex_t mem_handle_table_lock;
 };
 
-static int hl_get_memory_handle_key(struct hl_memory_ctx * const hl_ctx, const uint64_t addr, khint_t * const key)
-{
-    const khint_t k = kh_get(uint64_t, hl_ctx->mem_handle_table, (uintptr_t) addr);
-    if (k == kh_end(hl_ctx->mem_handle_table)) {
-        fprintf(stderr, "Failed to find memory handle\n");
-        return FAILURE;
+static int hl_set_memory_handle(struct hl_memory_ctx *const hl_ctx, const uint64_t addr, const uint64_t memory_handle) {
+    for (size_t i = 0; i < LIST_SIZE; i++) {
+        if (hl_ctx->mem_handle_table[i].is_occupied) {
+            continue;
+        }
+        hl_ctx->mem_handle_table[i].key = addr;
+        hl_ctx->mem_handle_table[i].value = memory_handle;
+        hl_ctx->mem_handle_table[i].is_occupied = true;
+        return SUCCESS; // successfully inserted
     }
-
-    *key = k;
-    return SUCCESS;
+    return FAILURE; // list is full
 }
 
-static int hl_set_memory_handle(struct hl_memory_ctx * const hl_ctx, const uint64_t addr, const uint64_t memory_handle)
-{
-    int rc = -1;
-    const khint_t k = kh_put(uint64_t, hl_ctx->mem_handle_table, addr, &rc);
-    if (-1 == rc) {
-        fprintf(stderr, "Failed to store memory handle\n");
-        return FAILURE;
+static int
+hl_delete_memory_handle(struct hl_memory_ctx *const hl_ctx, const uint64_t addr, uint64_t *const memory_handle) {
+    for (size_t i = 0; i < LIST_SIZE; ++i) {
+        if (hl_ctx->mem_handle_table[i].is_occupied && hl_ctx->mem_handle_table[i].key == addr) {
+            hl_ctx->mem_handle_table[i].is_occupied = false;
+            *memory_handle = hl_ctx->mem_handle_table[i].value;
+            return SUCCESS; // key removed
+        }
     }
-    kh_val(hl_ctx->mem_handle_table, k) = memory_handle;
-    return SUCCESS;
-}
-
-static int hl_delete_memory_handle(struct hl_memory_ctx * const hl_ctx, const uint64_t addr, uint64_t * const memory_handle)
-{
-    khint_t k;
-    if (SUCCESS != hl_get_memory_handle_key(hl_ctx, addr, &k)) {
-        return FAILURE;
-    }
-
-    *memory_handle = kh_val(hl_ctx->mem_handle_table, k);
-    kh_del(uint64_t, hl_ctx->mem_handle_table, k);
-    return SUCCESS;
+    return FAILURE; // key not found
 }
 
 int hl_memory_init(struct memory_ctx *ctx) {
@@ -70,15 +64,10 @@ int hl_memory_init(struct memory_ctx *ctx) {
         return FAILURE;
     }
 
-    hl_ctx->mem_handle_table = kh_init(uint64_t);
-    if (!hl_ctx->mem_handle_table) {
-        (void) hlthunk_close(hl_ctx->device_fd);
-        return FAILURE;
-    }
+    memset(hl_ctx->mem_handle_table, 0, sizeof(hl_ctx->mem_handle_table));
 
     if (0 != pthread_mutex_init(&hl_ctx->mem_handle_table_lock, NULL)) {
         (void) hlthunk_close(hl_ctx->device_fd);
-        kh_destroy(uint64_t, hl_ctx->mem_handle_table);
         return FAILURE;
     }
 
@@ -89,7 +78,6 @@ int hl_memory_destroy(struct memory_ctx *ctx) {
     struct hl_memory_ctx *const hl_ctx = container_of(ctx, struct hl_memory_ctx, base);
 
     (void) pthread_mutex_destroy(&hl_ctx->mem_handle_table_lock);
-    kh_destroy(uint64_t, hl_ctx->mem_handle_table);
     (void) hlthunk_close(hl_ctx->device_fd);
 
     free(hl_ctx);
@@ -121,8 +109,7 @@ int hl_memory_allocate_buffer(struct memory_ctx *ctx, int alignment, uint64_t si
         fprintf(stderr, "Failed to lock mutex while allocating memory\n");
         return FAILURE;
     }
-    if (SUCCESS != hl_set_memory_handle(hl_ctx, buffer_addr, memory_handle))
-    {
+    if (SUCCESS != hl_set_memory_handle(hl_ctx, buffer_addr, memory_handle)) {
         (void) pthread_mutex_unlock(&hl_ctx->mem_handle_table_lock);
         return FAILURE;
     }
@@ -142,7 +129,7 @@ int hl_memory_allocate_buffer(struct memory_ctx *ctx, int alignment, uint64_t si
     fprintf(stderr, "Allocated %lu bytes of accelerator buffer at %p on fd %d\n",
             (unsigned long) buf_size, (void *) buffer_addr, fd);
     *dmabuf_fd = fd;
-    *dmabuf_offset = 0;
+    *dmabuf_offset = NO_OFFSET;
     *addr = (void *) buffer_addr;
     *can_init = false;
     return SUCCESS;
@@ -161,7 +148,7 @@ int hl_memory_free_buffer(struct memory_ctx *ctx, int dmabuf_fd, void *addr, uin
         fprintf(stderr, "Failed to lock mutex while deallocating memory\n");
         return FAILURE;
     }
-    if (SUCCESS != hl_delete_memory_handle(hl_ctx, (uint64_t) addr, &memory_handle)){
+    if (SUCCESS != hl_delete_memory_handle(hl_ctx, (uint64_t) addr, &memory_handle)) {
         fprintf(stderr, "Failed to remove memory handle\n");
         (void) pthread_mutex_unlock(&hl_ctx->mem_handle_table_lock);
         return FAILURE;
