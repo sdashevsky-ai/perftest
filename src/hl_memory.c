@@ -63,11 +63,6 @@ static int hl_delete_memory_handle(struct hl_memory_ctx * const hl_ctx, const ui
     return SUCCESS;
 }
 
-static bool hl_is_gaudi1(const int fd) {
-    const enum hlthunk_device_name device = hlthunk_get_device_name_from_fd(fd);
-    return ((HLTHUNK_DEVICE_GAUDI == device) || (HLTHUNK_DEVICE_GAUDI_HL2000M == device));
-}
-
 int hl_memory_init(struct memory_ctx *ctx) {
     struct hl_memory_ctx *const hl_ctx = container_of(ctx, struct hl_memory_ctx, base);
     hl_ctx->device_fd = hlthunk_open(HLTHUNK_DEVICE_DONT_CARE, hl_ctx->device_bus_id);
@@ -135,13 +130,9 @@ int hl_memory_allocate_buffer(struct memory_ctx *ctx, int alignment, uint64_t si
         fprintf(stderr, "Failed to unlock mutex\n");
         return FAILURE;
     }
-    if (hl_is_gaudi1(hl_ctx->device_fd)) {
-        fd = hlthunk_device_memory_export_dmabuf_fd(hl_ctx->device_fd, buffer_addr, buf_size, NO_OFFSET);
-    } else {
-        fd = hlthunk_device_mapped_memory_export_dmabuf_fd(hl_ctx->device_fd, buffer_addr, buf_size, NO_OFFSET,
-                                                           O_RDWR | O_CLOEXEC);
-    }
 
+    fd = hlthunk_device_mapped_memory_export_dmabuf_fd(hl_ctx->device_fd, buffer_addr, buf_size, NO_OFFSET,
+                                                       O_RDWR | O_CLOEXEC);
     if (fd < 0) {
         fprintf(stderr, "Failed to export dmabuf. sz[%lu] ptr[%p] err[%d]\n",
                 (unsigned long) buf_size, (void *) buffer_addr, fd);
