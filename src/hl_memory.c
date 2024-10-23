@@ -10,7 +10,6 @@
 #include <fcntl.h>
 #include "hl_memory.h"
 #include "perftest_parameters.h"
-#include "synapse_api.h"
 #include "hlthunk.h"
 
 #define ACCEL_PAGE_SIZE (4096)
@@ -27,7 +26,6 @@ struct KeyValuePair {
 struct hl_memory_ctx {
 	struct memory_ctx base;
 	char *device_bus_id;
-	synDeviceId device_id;
 	int device_fd;
 	struct KeyValuePair mem_handle_table[LIST_SIZE];
 	pthread_mutex_t mem_handle_table_lock;
