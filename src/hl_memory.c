@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <pthread.h>
+#include <fcntl.h>
 #include "hl_memory.h"
 #include "perftest_parameters.h"
 #include "synapse_api.h"
