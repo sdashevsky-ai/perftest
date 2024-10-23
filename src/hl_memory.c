@@ -17,26 +17,26 @@
 
 #define LIST_SIZE (64)
 
-typedef struct {
+struct KeyValuePair {
 	uint64_t key;
 	uint64_t value;
 	bool is_occupied;
-} KeyValuePair;
+};
 
 struct hl_memory_ctx {
 	struct memory_ctx base;
 	char *device_bus_id;
 	synDeviceId device_id;
 	int device_fd;
-	KeyValuePair mem_handle_table[LIST_SIZE];
+	struct KeyValuePair mem_handle_table[LIST_SIZE];
 	pthread_mutex_t mem_handle_table_lock;
 };
 
-static int hl_set_memory_handle(struct hl_memory_ctx *const hl_ctx, const uint64_t addr, const uint64_t memory_handle) {
+static int hl_set_memory_handle(struct hl_memory_ctx *const hl_ctx, const uint64_t addr, const uint64_t memory_handle)
+{
 	for (size_t i = 0; i < LIST_SIZE; i++) {
-		if (hl_ctx->mem_handle_table[i].is_occupied) {
+		if (hl_ctx->mem_handle_table[i].is_occupied)
 			continue;
-		}
 		hl_ctx->mem_handle_table[i].key = addr;
 		hl_ctx->mem_handle_table[i].value = memory_handle;
 		hl_ctx->mem_handle_table[i].is_occupied = true;
@@ -45,8 +45,8 @@ static int hl_set_memory_handle(struct hl_memory_ctx *const hl_ctx, const uint64
 	return FAILURE; // list is full
 }
 
-static int
-hl_delete_memory_handle(struct hl_memory_ctx *const hl_ctx, const uint64_t addr, uint64_t *const memory_handle) {
+static int hl_delete_memory_handle(struct hl_memory_ctx *const hl_ctx, const uint64_t addr, uint64_t *const memory_handle)
+{
 	for (size_t i = 0; i < LIST_SIZE; ++i) {
 		if (hl_ctx->mem_handle_table[i].is_occupied && hl_ctx->mem_handle_table[i].key == addr) {
 			hl_ctx->mem_handle_table[i].is_occupied = false;
@@ -57,16 +57,17 @@ hl_delete_memory_handle(struct hl_memory_ctx *const hl_ctx, const uint64_t addr,
 	return FAILURE; // key not found
 }
 
-int hl_memory_init(struct memory_ctx *ctx) {
+int hl_memory_init(struct memory_ctx *ctx)
+{
 	struct hl_memory_ctx *const hl_ctx = container_of(ctx, struct hl_memory_ctx, base);
+
 	hl_ctx->device_fd = hlthunk_open(HLTHUNK_DEVICE_DONT_CARE, hl_ctx->device_bus_id);
-	if (hl_ctx->device_fd < 0) {
+	if (hl_ctx->device_fd < 0)
 		return FAILURE;
-	}
 
 	memset(hl_ctx->mem_handle_table, 0, sizeof(hl_ctx->mem_handle_table));
 
-	if (0 != pthread_mutex_init(&hl_ctx->mem_handle_table_lock, NULL)) {
+	if (pthread_mutex_init(&hl_ctx->mem_handle_table_lock, NULL) != 0) {
 		(void) hlthunk_close(hl_ctx->device_fd);
 		return FAILURE;
 	}
@@ -74,7 +75,8 @@ int hl_memory_init(struct memory_ctx *ctx) {
 	return SUCCESS;
 }
 
-int hl_memory_destroy(struct memory_ctx *ctx) {
+int hl_memory_destroy(struct memory_ctx *ctx)
+{
 	struct hl_memory_ctx *const hl_ctx = container_of(ctx, struct hl_memory_ctx, base);
 
 	(void) pthread_mutex_destroy(&hl_ctx->mem_handle_table_lock);
@@ -85,7 +87,8 @@ int hl_memory_destroy(struct memory_ctx *ctx) {
 }
 
 int hl_memory_allocate_buffer(struct memory_ctx *ctx, int alignment, uint64_t size, int *dmabuf_fd,
-							  uint64_t *dmabuf_offset, void **addr, bool *can_init) {
+							  uint64_t *dmabuf_offset, void **addr, bool *can_init)
+{
 	struct hl_memory_ctx *const hl_ctx = container_of(ctx, struct hl_memory_ctx, base);
 	const uint64_t page_size = 0;
 	const uint64_t NO_OFFSET = 0;
@@ -96,24 +99,24 @@ int hl_memory_allocate_buffer(struct memory_ctx *ctx, int alignment, uint64_t si
 
 	const uint64_t memory_handle = hlthunk_device_memory_alloc(hl_ctx->device_fd, buf_size, page_size,
 															   HL_MEM_CONTIGUOUS, NOT_SHARED);
-	if (0 == memory_handle) {
+	if (memory_handle == 0) {
 		fprintf(stderr, "Failed to allocate %lu bytes of device memory\n", buf_size);
 		return FAILURE;
 	}
 	buffer_addr = hlthunk_device_memory_map(hl_ctx->device_fd, memory_handle, 0);
-	if (0 == buffer_addr) {
+	if (buffer_addr == 0) {
 		fprintf(stderr, "Failed to map device memory allocation\n");
 		return FAILURE;
 	}
-	if (0 != pthread_mutex_lock(&hl_ctx->mem_handle_table_lock)) {
+	if (pthread_mutex_lock(&hl_ctx->mem_handle_table_lock) != 0) {
 		fprintf(stderr, "Failed to lock mutex while allocating memory\n");
 		return FAILURE;
 	}
-	if (SUCCESS != hl_set_memory_handle(hl_ctx, buffer_addr, memory_handle)) {
+	if (hl_set_memory_handle(hl_ctx, buffer_addr, memory_handle) != SUCCESS) {
 		(void) pthread_mutex_unlock(&hl_ctx->mem_handle_table_lock);
 		return FAILURE;
 	}
-	if (0 != pthread_mutex_unlock(&hl_ctx->mem_handle_table_lock)) {
+	if (pthread_mutex_unlock(&hl_ctx->mem_handle_table_lock) != 0) {
 		fprintf(stderr, "Failed to unlock mutex\n");
 		return FAILURE;
 	}
@@ -135,7 +138,8 @@ int hl_memory_allocate_buffer(struct memory_ctx *ctx, int alignment, uint64_t si
 	return SUCCESS;
 }
 
-int hl_memory_free_buffer(struct memory_ctx *ctx, int dmabuf_fd, void *addr, uint64_t size) {
+int hl_memory_free_buffer(struct memory_ctx *ctx, int dmabuf_fd, void *addr, uint64_t size)
+{
 	struct hl_memory_ctx *hl_ctx = container_of(ctx, struct hl_memory_ctx, base);
 	uint64_t memory_handle = INVALID_FD;
 	int rc = hlthunk_memory_unmap(hl_ctx->device_fd, (uint64_t) addr);
@@ -144,11 +148,11 @@ int hl_memory_free_buffer(struct memory_ctx *ctx, int dmabuf_fd, void *addr, uin
 		fprintf(stderr, "Failed to unmap host memory\n");
 		return rc;
 	}
-	if (0 != pthread_mutex_lock(&hl_ctx->mem_handle_table_lock)) {
+	if (pthread_mutex_lock(&hl_ctx->mem_handle_table_lock) != 0) {
 		fprintf(stderr, "Failed to lock mutex while deallocating memory\n");
 		return FAILURE;
 	}
-	if (SUCCESS != hl_delete_memory_handle(hl_ctx, (uint64_t) addr, &memory_handle)) {
+	if (hl_delete_memory_handle(hl_ctx, (uint64_t) addr, &memory_handle) != SUCCESS) {
 		fprintf(stderr, "Failed to remove memory handle\n");
 		(void) pthread_mutex_unlock(&hl_ctx->mem_handle_table_lock);
 		return FAILURE;
@@ -156,14 +160,16 @@ int hl_memory_free_buffer(struct memory_ctx *ctx, int dmabuf_fd, void *addr, uin
 
 	rc = hlthunk_device_memory_free(hl_ctx->device_fd, memory_handle);
 	pthread_mutex_unlock(&hl_ctx->mem_handle_table_lock);
-	return (0 == rc) ? SUCCESS : FAILURE;
+	return (rc == 0) ? SUCCESS : FAILURE;
 }
 
-bool hl_memory_supported() {
+bool hl_memory_supported(void)
+{
 	return true;
 }
 
-struct memory_ctx *hl_memory_create(struct perftest_parameters *params) {
+struct memory_ctx *hl_memory_create(struct perftest_parameters *params)
+{
 	struct hl_memory_ctx *ctx;
 
 	ALLOCATE(ctx, struct hl_memory_ctx, 1);
